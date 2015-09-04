@@ -238,48 +238,53 @@ def update_price_history(spreadsheet,ean,price):
 def load_amazon_api(): return API(locale='us')
 
 
-def get_info_for_listing(ean,amazon_api):
+def get_info_for_listing(asin,amazon_api):
     
-    large=amazon_api.item_lookup(str(ean),ResponseGroup='Large')
-    editorial=amazon_api.item_lookup(str(ean),ResponseGroup='EditorialReview')
+    large=amazon_api.item_lookup(str(asin),ResponseGroup='Large')
+    editorial=amazon_api.item_lookup(str(asin),ResponseGroup='EditorialReview')
 
-    amazon_item=dict()
-    try:
-        amazon_item['title']=large.Items.Item.ItemAttributes.Title
-    except AttributeError:
-        pass
-    try:
-        amazon_item['description']=editorial.Items.Item.EditorialReviews.EditorialReview.Content
-    except AttributeError:
-        pass
-    try:
-        amazon_item['pictureURL']=large.Items.Item.LargeImage.URL
-    except AttributeError:
-        pass
-    try:
-        amazon_item['feature']=large.Items.Item.ItemAttributes.Feature
-    except AttributeError:
-        pass
-    try:
-        amazon_item['UPC']=large.Items.Item.ItemAttributes.UPC
-    except AttributeError:
-        pass
-    try:
-        amazon_item['warranty']=large.Items.Item.ItemAttributes.Warranty
-    except AttributeError:
-        pass
-    try:
-        amazon_item['EAN']=large.Items.Item.ItemAttributes.EAN
-    except AttributeError:
-        pass
-    try:
-        amazon_item['Brand']=large.Items.Item.ItemAttributes.Brand
-    except AttributeError:
-        pass
-    try:
-        amazon_item['MPN']=large.Items.Item.ItemAttributes.MPN
-    except AttributeError:
-        pass
+    amazon_item={'item_exists':False}
+    
+    # That is, an Amazon Item was found.
+    if large.Items.Item.Offers.TotalOfferPages > 0:
+        amazon_item['item_exists']=True
+        
+        try:
+            amazon_item['title']=large.Items.Item.ItemAttributes.Title
+        except AttributeError:
+            pass
+        try:
+            amazon_item['description']=editorial.Items.Item.EditorialReviews.EditorialReview.Content
+        except AttributeError:
+            pass
+        try:
+            amazon_item['pictureURL']=large.Items.Item.LargeImage.URL
+        except AttributeError:
+            pass
+        try:
+            amazon_item['feature']=large.Items.Item.ItemAttributes.Feature
+        except AttributeError:
+            pass
+        try:
+            amazon_item['UPC']=large.Items.Item.ItemAttributes.UPC
+        except AttributeError:
+            pass
+        try:
+            amazon_item['warranty']=large.Items.Item.ItemAttributes.Warranty
+        except AttributeError:
+            pass
+        try:
+            amazon_item['EAN']=large.Items.Item.ItemAttributes.EAN
+        except AttributeError:
+            pass
+        try:
+            amazon_item['Brand']=large.Items.Item.ItemAttributes.Brand
+        except AttributeError:
+            pass
+        try:
+            amazon_item['MPN']=large.Items.Item.ItemAttributes.MPN
+        except AttributeError:
+            pass
    
     return amazon_item
     
@@ -349,52 +354,81 @@ def update_ebay_listing(row_num,item,index_locations,amazon_api,spreadsheet):
         print 'FAILURE during update'
         return False
         
-def update_summary(row_num,item,index_locations,amazon_api,spreadsheet):
-    ''' update google spreadsheet if amazon product changed. '''
+        
+def update_spreadsheet_info(row_num,current_item,amazon_item,index_locations,spreadsheet):
     ws_summary = spreadsheet.worksheet('summary')
     
-    large=amazon_api.item_lookup(item['ean'],ResponseGroup='Large')
-    newTitle=large.Items.Item.ItemAttributes.Title
-    if large.Items.Item.Offers.TotalOfferPages > 0: 
-        newPrice=large.Items.Item.Offers.Offer.OfferListing.Price.Amount/100.
-        
-        print "Title: %s:" % newTitle
-        
-        title_changed = item['curTitle'] != newTitle
-        price_changed = float(max(item['curPrice'],'0')) != newPrice    
-        
-        if title_changed:
-            ws_summary.update_cell(row_num+1,index_locations['title_index']+1,newTitle)
-            item['curTitle'] = newTitle
-            
-        if price_changed:
-            ws_summary.update_cell(row_num+1,index_locations['price_index']+1,newPrice)
-            item['curPrice'] = newPrice
-            
-        if title_changed or price_changed:
-            ws_summary.update_cell(row_num+1,index_locations['updated_index']+1,mktime(localtime()))
-            ws_summary.update_cell(row_num+1,int(index_locations['count_index'])+1,int(item['curCount'])+1)
-            item['curCount']+=1
+    # Check if the amazon listing changed at all.
+    title_changed = current_item['title'] != amazon_item['title']
+    price_changed = float(current_item['price']) != amazon_item['price']
     
-        update_price_history(spreadsheet,item['ean'],float(newPrice))
+    # Update google spreadsheet (main)
+    if title_changed:
+        ws_summary.update_cell(row_num+1,index_locations['title_index']+1,amazon_item['title'])
+        item['title'] = newTitle
+        
+    if price_changed:
+        ws_summary.update_cell(row_num+1,index_locations['price_index']+1,amazon_item['price'])
+        item['price'] = newPrice
+        
+    if title_changed or price_changed:
+        ws_summary.update_cell(row_num+1,index_locations['updated_index']+1,mktime(localtime()))
+        ws_summary.update_cell(row_num+1,int(index_locations['count_index'])+1,int(current_item['count'])+1)
+        current_item['count']+=1
+
+def update_summary(row_num,current_item,index_locations,amazon_item,spreadsheet):
+    ''' update google spreadsheet if amazon product changed. '''
+    #ws_summary = spreadsheet.worksheet('summary')
+        
+    #newTitle
+    if large.Items.Item.Offers.TotalOfferPages > 0:       
+        print "Title: %s:" % amazon_item['title']
+        
+        # Keep spreadsheet up to date
+        update_spreadsheet_info(row_num,current_item,amazon_item,index_locations,spreadsheet)
+    
+        # Add item price to historical tab
+        update_price_history(spreadsheet,current_item['ASIN'],float(current_item['price']))
     
         # If price changed, create or update
-        if price_changed:
+        if float(current_item['price']) != amazon_item['price']:
+            
             # If there is an eBay ID, then attempt to update it
-            if item['ebayID'] != '':
-                print 'Updating item %s' % item['ebayID']
+            if current_item['ebayID'] != '':
+                print 'Updating item %s' % current_item['ebayID']
                 # If the eBay ID is valid, then actually update it
-                if check_ebay_item_exists(item['ebayID']):
-                    update_ebay_listing(row_num,item,index_locations,amazon_api,spreadsheet)
+                if check_ebay_item_exists(current_item['ebayID']):
+                    update_ebay_listing(row_num,current_item,index_locations,amazon_api,spreadsheet)
                 else:
-                    print 'Failed to update item %s.  Item does not exist.' % item['ebayID']
+                    print 'Failed to update item %s.  Item does not exist.' % current_item['ebayID']
             # If eBay ID does not exist, then create a listing
-            elif not check_ebay_item_exists(item['ebayID']):
-                create_ebay_listing(row_num,item,index_locations,amazon_api,spreadsheet)
+            elif not check_ebay_item_exists(current_item['ebayID']):
+                create_ebay_listing(row_num,current_item,index_locations,amazon_api,spreadsheet)
         else:
             print 'No price changed.  Doing nothing.'
     else:   pass 
 
+        
+def read_google_spreadsheet(): 
+    item={'ASIN':ws_list[row_num][index_locations['asin_index']],
+              'title':ws_list[row_num][index_locations['title_index']],
+              'price':ws_list[row_num][index_locations['price_index']],
+              'count':ws_list[row_num][index_locations['count_index']],
+              'ebayID':ws_list[row_num][index_locations['ebayid_index']]}
+    if item['price'] == '' or item['price'] == None:
+        item['price'] = '-1'
+    return item
+        
+def load_index_locations():
+    index_locations={   'asin_index': ws_list[0].index('ASIN'),
+                        'title_index': ws_list[0].index('Title'),
+                        'price_index': ws_list[0].index('Price'),
+                        'count_index': ws_list[0].index('Times Updated'),
+                        'updated_index':ws_list[0].index('Last Updated'),
+                        'ebayid_index':ws_list[0].index('eBay ID'),
+                        'ebayprice_index':ws_list[0].index('eBay Price'),
+                        'profit_index':ws_list[0].index('Profit')}        
+    return index_locations
         
 def main():            
     (gc,spreadsheet) = load_listings()
@@ -404,28 +438,19 @@ def main():
     
     amazon_api=load_amazon_api()
     
-    index_locations={   'ean_index': ws_list[0].index('EAN'),
-                        'title_index': ws_list[0].index('Title'),
-                        'price_index': ws_list[0].index('Price'),
-                        'count_index': ws_list[0].index('Times Updated'),
-                        'updated_index':ws_list[0].index('Last Updated'),
-                        'ebayid_index':ws_list[0].index('eBay ID'),
-                        'ebayprice_index':ws_list[0].index('eBay Price'),
-                        'profit_index':ws_list[0].index('Profit')
-    }
+    index_locations=load_index_locations()
     
     for row_num in arange(1,len(ws_list)):
-        #print ws_list[row_num]
-        item={'ean':ws_list[row_num][index_locations['ean_index']],
-              'curTitle':ws_list[row_num][index_locations['title_index']],
-              'curPrice':ws_list[row_num][index_locations['price_index']],
-              'curCount':ws_list[row_num][index_locations['count_index']],
-              'ebayID':ws_list[row_num][index_locations['ebayid_index']]}
+        # read google spreadsheet
+        current_item=read_google_spreadsheet()
+        
+        # Get all Amazon details
+        amazon_item = get_info_for_listing(item['ASIN'],amazon_api)
+
     
-        #print item['ebayID']==''
         if item['curCount'] == '': item['curCount'] = 0
         item['curCount']=int(item['curCount'])
-        update_summary(row_num,item,index_locations,amazon_api,spreadsheet)
+        update_summary(row_num,current_item,index_locations,amazon_item,spreadsheet)
         
 if __name__=='__main__':
     main()
