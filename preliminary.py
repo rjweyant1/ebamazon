@@ -17,6 +17,9 @@ from httplib import CannotSendRequest
 credentials_file='/media/roberto/Main Storage/Documents/Oauth/ebay/ebay_oauth_creds.txt'
 with open(credentials_file,'r') as creds_file:
     (appid,devid,certid,config_file) = [line.strip().split(':')[1] for line in creds_file]
+
+
+
         
 def load_listings(
     oauthfile = '/media/roberto/Main Storage/Documents/Oauth/google/API Project-c86cee112445.json',                  
@@ -254,6 +257,10 @@ def get_info_for_listing(asin,amazon_api):
         except AttributeError:
             pass
         try:
+            amazon_item['price'] = large.Items.Item.OfferSummary.LowestNewPrice.Amount/100.
+        except: 
+            pass
+        try:
             amazon_item['description']=editorial.Items.Item.EditorialReviews.EditorialReview.Content
         except AttributeError:
             pass
@@ -360,7 +367,7 @@ def update_spreadsheet_info(row_num,current_item,amazon_item,index_locations,spr
     
     # Check if the amazon listing changed at all.
     title_changed = current_item['title'] != amazon_item['title']
-    price_changed = float(current_item['price']) != amazon_item['price']
+    price_changed = float(current_item['price']) != float(amazon_item['price'])
     
     # Update google spreadsheet (main)
     if title_changed:
@@ -378,10 +385,10 @@ def update_spreadsheet_info(row_num,current_item,amazon_item,index_locations,spr
 
 def update_summary(row_num,current_item,index_locations,amazon_item,spreadsheet):
     ''' update google spreadsheet if amazon product changed. '''
-    #ws_summary = spreadsheet.worksheet('summary')
+
+    if amazon_item['item_exists']:       
         
-    #newTitle
-    if large.Items.Item.Offers.TotalOfferPages > 0:       
+        # OUTPUT
         print "Title: %s:" % amazon_item['title']
         
         # Keep spreadsheet up to date
@@ -409,17 +416,19 @@ def update_summary(row_num,current_item,index_locations,amazon_item,spreadsheet)
     else:   pass 
 
         
-def read_google_spreadsheet(): 
+def read_google_spreadsheet(row_num): 
     item={'ASIN':ws_list[row_num][index_locations['asin_index']],
               'title':ws_list[row_num][index_locations['title_index']],
               'price':ws_list[row_num][index_locations['price_index']],
               'count':ws_list[row_num][index_locations['count_index']],
-              'ebayID':ws_list[row_num][index_locations['ebayid_index']]}
+              'ebayID':ws_list[row_num][index_locations['ebayid_index']],
+              'profit':ws_list[row_num][index_locations['profit_index']],
+              'ebayPrice':ws_list[row_num][index_locations['ebayprice_index']]}
     if item['price'] == '' or item['price'] == None:
         item['price'] = '-1'
     return item
         
-def load_index_locations():
+def load_index_locations(ws_list):
     index_locations={   'asin_index': ws_list[0].index('ASIN'),
                         'title_index': ws_list[0].index('Title'),
                         'price_index': ws_list[0].index('Price'),
@@ -431,25 +440,27 @@ def load_index_locations():
     return index_locations
         
 def main():            
-    (gc,spreadsheet) = load_listings()
-    ws_summary = spreadsheet.worksheet('summary')
     
+    # Load google spreadsheet
+    (gc,spreadsheet) = load_listings()
+    ws_summary = spreadsheet.worksheet('summary')   
     ws_list=ws_summary.get_all_values()
     
     amazon_api=load_amazon_api()
     
-    index_locations=load_index_locations()
+    index_locations=load_index_locations(ws_list)
     
     for row_num in arange(1,len(ws_list)):
+        
         # read google spreadsheet
-        current_item=read_google_spreadsheet()
+        current_item=read_google_spreadsheet(row_num)
+        if current_item['curCount'] == '': current_item['curCount'] = 0
+        current_item['curCount']=int(current_item['curCount'])
         
         # Get all Amazon details
-        amazon_item = get_info_for_listing(item['ASIN'],amazon_api)
+        amazon_item = get_info_for_listing(current_item['ASIN'],amazon_api)
 
-    
-        if item['curCount'] == '': item['curCount'] = 0
-        item['curCount']=int(item['curCount'])
+        # Update item summary
         update_summary(row_num,current_item,index_locations,amazon_item,spreadsheet)
         
 if __name__=='__main__':
