@@ -178,7 +178,7 @@ def dev_ReviseFixedPriceItem(ItemID,newPrice):
        
     try:
         api = Trading(config_file=config_file, appid=appid,
-                      certid=certid, devid=devid, warnings=False)
+                      certid=certid, devid=devid, warnings=False,)
 
         myitem = {
             "Item": {
@@ -226,16 +226,6 @@ def check_ebay_item_exists(itemID):
        
     except ConnectionError as e:
         return False
-    
-
-def update_price_history(spreadsheet,ean,price):
-    ''' update price_history '''
-    ws_price_history = spreadsheet.worksheet('price_history')
-    num_rows = len(ws_price_history.get_all_values())
-    
-    ws_price_history.update_cell(num_rows+1,1,ean)
-    ws_price_history.update_cell(num_rows+1,2,price)
-    ws_price_history.update_cell(num_rows+1,3,mktime(localtime()))
 
     
 def load_amazon_api(): return API(locale='us')
@@ -298,25 +288,22 @@ def get_info_for_listing(asin,amazon_api):
 def set_price(curPrice,profit=3,scale=1.13):
     return round(float(curPrice)*scale+profit,2)
    
-def create_ebay_listing(row_num,item,index_locations,amazon_api,spreadsheet):
+def create_ebay_listing(row_num,current_item,index_locations,amazon_item,spreadsheet):
     ''' create new ebay listing'''
     
     ws_summary = spreadsheet.worksheet('summary')
-    amazon_item=get_info_for_listing(item['ean'],amazon_api)
-    profit = ws_summary.cell(row_num+1,index_locations['profit_index']+1).numeric_value
+    
+    profit = current_item['profit']
     if profit == '':
         profit = 3
         ws_summary.update_cell(row_num+1,index_locations['profit_index']+1,3)
         
     try:
         print 'Creating new eBay Listing for EAN:%s' % item['ean']
-        item_price = set_price(item['curPrice'],profit=profit)
+        intended_price = set_price(current_item['price'],profit=profit)
         create_ebay_item_response = dev_AddFixedPriceItem(
-                        PrimaryCategory='36032',
-                        StartPrice=item_price,
-                        #Title=amazon_item['title'],
-                        #Description=amazon_item['description'],
-                        #PictureURL=amazon_item['pictureURL'],
+                        PrimaryCategory=current_item['eBay Category'],
+                        StartPrice=intended_price ,
                         amazon_item=amazon_item,
                         ListingDuration="Days_30",
                         PayPalEmailAddress="robert.weyant@gmail.com",
@@ -326,7 +313,7 @@ def create_ebay_listing(row_num,item,index_locations,amazon_api,spreadsheet):
         # Add eBay Item ID into spreadsheet
         ws_summary.update_cell(row_num+1,index_locations['ebayid_index']+1,itemID)
         # Add eBay Item Price into spreadsheet
-        ws_summary.update_cell(row_num+1,index_locations['ebayprice_index']+1,item_price)
+        ws_summary.update_cell(row_num+1,index_locations['ebayprice_index']+1,intended_price)
         
         print 'Successfully created eBay Listing:%s' % (itemID)
         return create_ebay_item_response
@@ -336,31 +323,42 @@ def create_ebay_listing(row_num,item,index_locations,amazon_api,spreadsheet):
     except:
         return False
 
-def update_ebay_listing(row_num,item,index_locations,amazon_api,spreadsheet):        
+def update_ebay_listing(row_num,current_item,index_locations,amazon_item,spreadsheet):        
     ''' update ebay listing '''
-    print 'Updating eBay Listing: %s for EAN: %s' % (item['ebayID'],item['ean'])
+    print 'Updating eBay Listing: %s for ASIN: %s' % (current_item['ebayID'],current_item['ASIN'])
     
     ws_summary = spreadsheet.worksheet('summary')
     
-    profit = ws_summary.cell(row_num+1,index_locations['profit_index']+1).numeric_value
+    profit = float(current_item['profit'])
     if profit == '' or profit == None:
         profit = 3
         ws_summary.update_cell(row_num+1,index_locations['profit_index']+1,3)
     
-    item_price = set_price(item['curPrice'],profit=profit)    
+    intended_price = set_price(current_item['price'],profit=profit)    
     
     # Add eBay Item Price into spreadsheet
-    ws_summary.update_cell(row_num+1,index_locations['ebayprice_index']+1,item_price)
+    ws_summary.update_cell(row_num+1,index_locations['ebayprice_index']+1,intended_price)
         
     try:
-        response=dev_ReviseFixedPriceItem(ItemID=item['ebayID'],
-                                           newPrice=item_price )
+        response=dev_ReviseFixedPriceItem(ItemID=current_item['ebayID'],
+                                           newPrice=intended_price )
         return response
         
     except:
         print 'FAILURE during update'
         return False
-        
+       
+    
+
+def update_price_history(spreadsheet,asin,price):
+    ''' update price_history '''
+    ws_price_history = spreadsheet.worksheet('price_history')
+    num_rows = len(ws_price_history.get_all_values())
+    
+    ws_price_history.update_cell(num_rows+1,1,asin)
+    ws_price_history.update_cell(num_rows+1,2,price)
+    ws_price_history.update_cell(num_rows+1,3,mktime(localtime()))
+       
         
 def update_spreadsheet_info(row_num,current_item,amazon_item,index_locations,spreadsheet):
     ws_summary = spreadsheet.worksheet('summary')
@@ -372,11 +370,11 @@ def update_spreadsheet_info(row_num,current_item,amazon_item,index_locations,spr
     # Update google spreadsheet (main)
     if title_changed:
         ws_summary.update_cell(row_num+1,index_locations['title_index']+1,amazon_item['title'])
-        item['title'] = newTitle
+        current_item['title'] = amazon_item['title']
         
     if price_changed:
         ws_summary.update_cell(row_num+1,index_locations['price_index']+1,amazon_item['price'])
-        item['price'] = newPrice
+        current_item['price'] = amazon_item['price']
         
     if title_changed or price_changed:
         ws_summary.update_cell(row_num+1,index_locations['updated_index']+1,mktime(localtime()))
@@ -397,20 +395,29 @@ def update_summary(row_num,current_item,index_locations,amazon_item,spreadsheet)
         # Add item price to historical tab
         update_price_history(spreadsheet,current_item['ASIN'],float(current_item['price']))
     
+        intended_price = set_price(amazon_item['price'],profit=float(current_item['profit']))
+    
         # If price changed, create or update
-        if float(current_item['price']) != amazon_item['price']:
+        if float(current_item['ebayPrice']) != intended_price: 
             
             # If there is an eBay ID, then attempt to update it
             if current_item['ebayID'] != '':
-                print 'Updating item %s' % current_item['ebayID']
+                if current_item['ebayID'] == '0':
+                    print 'Testing. Carry On.'
+                    ws_summary = spreadsheet.worksheet('summary')
+                    ws_summary.update_cell(row_num+1,index_locations['ebayprice_index']+1,intended_price)
+                    
                 # If the eBay ID is valid, then actually update it
-                if check_ebay_item_exists(current_item['ebayID']):
+                elif check_ebay_item_exists(current_item['ebayID']):
+                    print 'Updating item %s' % current_item['ebayID']
                     update_ebay_listing(row_num,current_item,index_locations,amazon_api,spreadsheet)
+                # if non-blank eBay Item ID is present -- then skip.
                 else:
                     print 'Failed to update item %s.  Item does not exist.' % current_item['ebayID']
+            
             # If eBay ID does not exist, then create a listing
             elif not check_ebay_item_exists(current_item['ebayID']):
-                create_ebay_listing(row_num,current_item,index_locations,amazon_api,spreadsheet)
+                create_ebay_listing(row_num,current_item,index_locations,amazon_item,spreadsheet)
         else:
             print 'No price changed.  Doing nothing.'
     else:   pass 
@@ -423,7 +430,8 @@ def read_google_spreadsheet(row_num):
               'count':ws_list[row_num][index_locations['count_index']],
               'ebayID':ws_list[row_num][index_locations['ebayid_index']],
               'profit':ws_list[row_num][index_locations['profit_index']],
-              'ebayPrice':ws_list[row_num][index_locations['ebayprice_index']]}
+              'ebayPrice':fix_null_number(ws_list[row_num][index_locations['ebayprice_index']]),
+              'eBay Category':ws_list[row_num][index_locations['eBay Category']]}
     if item['price'] == '' or item['price'] == None:
         item['price'] = '-1'
     return item
@@ -436,9 +444,14 @@ def load_index_locations(ws_list):
                         'updated_index':ws_list[0].index('Last Updated'),
                         'ebayid_index':ws_list[0].index('eBay ID'),
                         'ebayprice_index':ws_list[0].index('eBay Price'),
+                        'eBay Category':ws_list[0].index('eBay Category'),
                         'profit_index':ws_list[0].index('Profit')}        
     return index_locations
-        
+
+def fix_null_number(number):
+    if number == '': return '0'
+    else: return number
+    
 def main():            
     
     # Load google spreadsheet
@@ -454,8 +467,8 @@ def main():
         
         # read google spreadsheet
         current_item=read_google_spreadsheet(row_num)
-        if current_item['curCount'] == '': current_item['curCount'] = 0
-        current_item['curCount']=int(current_item['curCount'])
+        if current_item['count'] == '': current_item['count'] = 0
+        current_item['count']=int(current_item['count'])
         
         # Get all Amazon details
         amazon_item = get_info_for_listing(current_item['ASIN'],amazon_api)
